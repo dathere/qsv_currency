@@ -17,10 +17,10 @@
 //! ## Example
 //!
 //! ```
-//! extern crate currency;
+//! extern crate qsv_currency;
 //!
 //! fn main() {
-//!     use currency::Currency;
+//!     use qsv_currency::Currency;
 //!
 //!     let sock_price = Currency::from_str("$11.99").unwrap();
 //!     let toothbrush_price = Currency::from_str("$1.99").unwrap();
@@ -82,7 +82,7 @@ impl Currency {
     /// # Examples
     ///
     /// ```
-    /// use currency::Currency;
+    /// use qsv_currency::Currency;
     ///
     /// let c = Currency::from(1000, '$');
     /// assert_eq!(c, Currency::from_str("$10.00").unwrap());
@@ -100,12 +100,13 @@ impl Currency {
     /// # Examples
     ///
     /// ```
-    /// use currency::Currency;
+    /// use qsv_currency::Currency;
     ///
     /// let c1 = Currency::from_str("$42.32").unwrap();
     /// let c2 = Currency::from_str("$0.10").unwrap();
     /// assert_eq!(c1 + c2, Currency::from_str("$42.42").unwrap());
     /// ```
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Currency, ParseCurrencyError> {
         use std::str::FromStr;
 
@@ -128,6 +129,7 @@ impl Currency {
         let mut last_delimiter = None;
         let mut last_streak_len = 0;
         for c in s.chars() {
+            #[allow(clippy::len_zero)]
             if (c == '(' || c == '-') && digits.len() == 0 {
                 if !symbol.is_empty() {
                     symbol_ended = true;
@@ -152,6 +154,7 @@ impl Currency {
             }
         }
 
+        #[allow(clippy::len_zero)]
         let unsigned_bigint = if digits.len() > 0 {
             let parse_result = BigUint::from_str(&digits);
             match parse_result {
@@ -201,11 +204,11 @@ impl Currency {
     ///
     /// ```
     /// extern crate num;
-    /// extern crate currency;
+    /// extern crate qsv_currency;
     ///
     /// fn main() {
     ///     use num::traits::ToPrimitive;
-    ///     use currency::Currency;
+    ///     use qsv_currency::Currency;
     ///
     ///     let c1 = Currency::new();
     ///     assert_eq!(c1.value().to_u32().unwrap(), 0);
@@ -223,10 +226,10 @@ impl Currency {
     /// # Examples
     ///
     /// ```
-    /// extern crate currency;
+    /// extern crate qsv_currency;
     ///
     /// fn main() {
-    ///     use currency::Currency;
+    ///     use qsv_currency::Currency;
     ///
     ///     let c1 = Currency::from_str("USD1.00").unwrap();
     ///     assert_eq!(c1.symbol(), "USD");
@@ -247,10 +250,10 @@ impl Currency {
     /// # Examples
     ///
     /// ```
-    /// extern crate currency;
+    /// extern crate qsv_currency;
     ///
     /// fn main() {
-    ///     use currency::Currency;
+    ///     use qsv_currency::Currency;
     ///
     ///     let mut c = Currency::from_str("USD1.00").unwrap();
     ///     c.set_symbol('$');
@@ -268,7 +271,7 @@ impl Currency {
     /// # Examples
     ///
     /// ```
-    /// use currency::Currency;
+    /// use qsv_currency::Currency;
     ///
     /// let dollars = Currency::from_str("$10.00").unwrap();
     /// let conv_rate = 0.89;
@@ -296,7 +299,7 @@ impl Currency {
 /// # Example
 ///
 /// ```
-/// use currency::Currency;
+/// use qsv_currency::Currency;
 ///
 /// let dollars = Currency::from_str("$12.10").unwrap();
 /// assert_eq!(dollars.to_string(), "$12.10");
@@ -393,7 +396,7 @@ impl error::Error for ParseCurrencyError {
 /// # Example
 ///
 /// ```
-/// use currency::Currency;
+/// use qsv_currency::Currency;
 ///
 /// let euros = Currency::from_str("£1000,99").unwrap();
 /// println!("{:e}", euros);
