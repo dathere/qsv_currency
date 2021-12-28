@@ -2,18 +2,10 @@
 
 A very small library, providing a way to represent currencies in Rust.
 
-[Documentation](http://tahler.github.io/currency-rs/currency/index.html).
+This is a fork of https://github.com/Tahler/currency-rs, pulling in pending PRs
+for currency strings (e.g. "USD, EUR, etc." - not just single character symbols - "$, €, etc.")
+and serde support.
 
-[Crate](https://crates.io/crates/currency).
+It also upgrades the num dependency from 0.1.32 to 0.4.0.
 
-## Progress
-
-I am slowly but surely working on an implementation of an IEEE standard decimal encoding in another [repo](https://github.com/Tahler/decimal-rs). 
-
-Once that is finished, this currency library will be refactored to use the MUCH smaller encoding, allowing the type to be cloned and copied freely.
-
-## Contributing
-
-See [CONTRIBUTING.md]
-(https://github.com/Tahler/currency-rs/blob/master/CONTRIBUTING.md) if 
-you'd like to contribute to this project.
+This fork was primarily created for the [qsv](https://github.com/jqnatividad/qsv) CSV data-wrangling toolkit.

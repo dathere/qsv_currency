@@ -1,11 +1,12 @@
 [package]
-name = "currency"
-version = "0.4.0"
-authors = ["tyler@berryac.com"]
+name = "qsv_currency"
+version = "0.5.0"
+authors = ["Joel Natividad <joel@datHere.com>"]
 description = "A library for representing international currencies."
-repository = "https://github.com/Tahler/rust-lang-currency"
-documentation = "http://tahler.github.io/rust-lang-currency/currency/index.html"
-keywords = ["currency", "money", "taxes", "bank", "international"]
+repository = "https://github.com/jqnatividad/currency-rs"
+documentation = "https://docs.rs/qsv_currency"
+keywords = ["currency", "money", "bank", "international"]
+categories = ["parser-implementations", "value-formatting", "internationalization"]
 license = "MIT"
 
 [dependencies]
