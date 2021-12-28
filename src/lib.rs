@@ -108,7 +108,6 @@ impl Currency {
     /// ```
     pub fn from_str(s: &str) -> Result<Currency, ParseCurrencyError> {
         use std::str::FromStr;
-        use num::bigint::{BigUint, Sign};
 
         let err = ParseCurrencyError::new(s);
 
