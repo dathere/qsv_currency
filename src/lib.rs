@@ -169,20 +169,20 @@ impl Currency {
         // decimal adjustment
         if last_delimiter.is_none() || last_streak_len == 3 { // no decimal at all
             let big_int_factor = BigInt::from(100);
-            coin = coin * big_int_factor;
+            coin *= big_int_factor;
         } else if last_streak_len < 2 { // specifying less cents than needed
             let factor = 10u32.pow(2 - last_streak_len);
             let big_int_factor = BigInt::from(factor);
-            coin = coin * big_int_factor;
+            coin *= big_int_factor;
         } else if last_streak_len > 2 { // specifying more cents than we can hold
             let divisor = 10u32.pow(last_streak_len - 2);
             let big_int = BigInt::from(divisor);
-            coin = coin / big_int;
+            coin /= big_int;
         } // else the user has valid cents, no adjustment needed
 
         let currency = Currency {
-            symbol: symbol,
-            coin: coin
+            symbol,
+            coin
         };
 
         Ok(currency)
