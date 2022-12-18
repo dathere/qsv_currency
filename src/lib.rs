@@ -72,7 +72,7 @@ impl Currency {
     /// Creates a blank Currency with no symbol and 0 coin.
     pub fn new() -> Self {
         Currency {
-            symbol: "".into(),
+            symbol: String::new(),
             coin: BigInt::zero(),
         }
     }
@@ -112,11 +112,11 @@ impl Currency {
 
         let err = ParseCurrencyError::new(s);
 
-        fn is_symbol(c: char) -> bool {
-            !c.is_digit(10) && c != '-' && c != '.' && c != ',' && c != ')'
+        const fn is_symbol(c: char) -> bool {
+            !c.is_ascii_digit() && c != '-' && c != '.' && c != ',' && c != ')'
         }
 
-        fn is_delimiter(c: char) -> bool {
+        const fn is_delimiter(c: char) -> bool {
             c == '.' || c == ','
         }
 
@@ -129,8 +129,7 @@ impl Currency {
         let mut last_delimiter = None;
         let mut last_streak_len = 0;
         for c in s.chars() {
-            #[allow(clippy::len_zero)]
-            if (c == '(' || c == '-') && digits.len() == 0 {
+            if (c == '(' || c == '-') && digits.is_empty() {
                 if !symbol.is_empty() {
                     symbol_ended = true;
                 }
@@ -154,18 +153,16 @@ impl Currency {
             }
         }
 
-        #[allow(clippy::len_zero)]
-        let unsigned_bigint = if digits.len() > 0 {
-            let parse_result = BigUint::from_str(&digits);
-            match parse_result {
-                Ok(int) => int,
-                Err(_) => {
-                    println!("{:?}", digits);
-                    return Err(err);
-                }
-            }
-        } else {
+        let unsigned_bigint = if digits.is_empty() {
             BigUint::zero()
+        } else {
+            let parse_result = BigUint::from_str(&digits);
+            if let Ok(int) = parse_result {
+                int
+            } else {
+                println!("{digits:?}");
+                return Err(err);
+            }
         };
         let mut coin = BigInt::from_biguint(sign, unsigned_bigint);
 
@@ -181,9 +178,17 @@ impl Currency {
             coin *= big_int_factor;
         } else if last_streak_len > 2 {
             // specifying more cents than we can hold
-            let divisor = 10u32.pow(last_streak_len - 2);
-            let big_int = BigInt::from(divisor);
-            coin /= big_int;
+            // we "round"
+            let str_val = format!("{coin}");
+            let float_val = str_val.parse::<f64>().unwrap() / (10u32.pow(last_streak_len - 2) as f64);
+            let rounded_val = float_val.round() as u64;
+            let rounded_str = rounded_val.to_string();
+            let Ok(unsigned_bigint) = BigUint::from_str(&rounded_str) else {
+                println!("rounding error: {float_val:?}");
+                return Err(err);
+            };
+            let rounded_coin = BigInt::from_biguint(sign, unsigned_bigint);
+            coin = rounded_coin;
         } // else the user has valid cents, no adjustment needed
 
         let currency = Currency { symbol, coin };
@@ -217,7 +222,7 @@ impl Currency {
     ///     assert_eq!(c2.value().to_u32().unwrap(), 142);
     /// }
     /// ```
-    pub fn value(&self) -> &BigInt {
+    pub const fn value(&self) -> &BigInt {
         &self.coin
     }
 
@@ -336,11 +341,12 @@ impl fmt::Display for Currency {
             let dec_digit_str = &digit_str[n_before_dec..n_digits];
 
             let first_section_len = n_before_dec % SECTION_LEN;
-            let mut counter = if first_section_len != 0 {
-                SECTION_LEN - first_section_len
-            } else {
+            let mut counter = if first_section_len == 0 {
                 0
+            } else {
+                SECTION_LEN - first_section_len
             };
+
             for digit in int_digit_str.chars() {
                 if counter == SECTION_LEN {
                     counter = 0;
@@ -353,7 +359,7 @@ impl fmt::Display for Currency {
             result.push_str(dec_digit_str);
         }
 
-        write!(f, "{}", result)
+        write!(f, "{result}")
     }
 }
 
@@ -407,10 +413,10 @@ impl error::Error for ParseCurrencyError {
 /// ```
 impl fmt::LowerExp for Currency {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let temp = format!("{}", self).replace(".", "x");
-        let almost = temp.replace(",", ".");
-        let there_we_go = almost.replace("x", ",");
-        write!(f, "{}", there_we_go)
+        let temp = format!("{self}").replace('.', "x");
+        let almost = temp.replace(',', ".");
+        let there_we_go = almost.replace('x', ",");
+        write!(f, "{there_we_go}")
     }
 }
 
@@ -854,6 +860,19 @@ mod tests {
 
     #[test]
     fn test_from_str() {
+        // rounding
+        let expected = Currency { symbol: "$".into(), coin: BigInt::from(1001) };
+        let actual = Currency::from_str("$10.0099").unwrap();
+        assert_eq!(expected, actual);
+        let expected = Currency { symbol: "$".into(), coin: BigInt::from(10078) };
+        let actual = Currency::from_str("$100.777777").unwrap();
+        assert_eq!(expected, actual);
+
+        // TODO rounding still doesn't work when you have three decimal places
+        // let expected = Currency { symbol: "$".into(), coin: BigInt::from(10078) };
+        // let actual = Currency::from_str("$100.777").unwrap();
+        // assert_eq!(expected, actual);
+
         let expected = Currency {
             symbol: "$".into(),
             coin: BigInt::from(1210),
@@ -1003,10 +1022,6 @@ mod tests {
         let actual = Currency::from_str("$10.0001").unwrap();
         assert_eq!(expected, actual);
 
-        // TODO rounding
-        // let expected = Currency { symbol: "$".into(), coin: BigInt::from(1001) };
-        // let actual = Currency::from_str("$10.0099").unwrap();
-        // assert_eq!(expected, actual);
     }
 
     #[test]
