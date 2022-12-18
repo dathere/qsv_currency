@@ -8,6 +8,7 @@ documentation = "https://docs.rs/qsv_currency"
 keywords = ["currency", "money", "bank", "international"]
 categories = ["parser-implementations", "value-formatting", "internationalization"]
 license = "MIT"
+edition = "2021"
 
 [dependencies]
 num = "0.4.0"
