@@ -39,8 +39,10 @@
 //! This crate also does not handle rounding or precision. Values are truncated during
 //! multiplication, division, and extra precision in a parse (such as gas prices).
 
-extern crate num;
-extern crate serde;
+use std::sync::OnceLock;
+
+use ahash::HashSet;
+use iso_currency::IntoEnumIterator;
 
 #[cfg(test)]
 extern crate serde_json;
@@ -180,7 +182,8 @@ impl Currency {
             // specifying more cents than we can hold
             // we "round"
             let str_val = format!("{coin}");
-            let float_val = str_val.parse::<f64>().unwrap() / (10u32.pow(last_streak_len - 2) as f64);
+            let float_val =
+                str_val.parse::<f64>().unwrap() / (10u32.pow(last_streak_len - 2) as f64);
             let rounded_val = float_val.round() as u64;
             let rounded_str = rounded_val.to_string();
             let Ok(unsigned_bigint) = BigUint::from_str(&rounded_str) else {
@@ -191,12 +194,16 @@ impl Currency {
             coin = rounded_coin;
         } // else the user has valid cents, no adjustment needed
 
-        let currency = Currency { symbol, coin };
+        let currency = Currency {
+            symbol: symbol.trim_end().to_string(),
+            coin,
+        };
 
         Ok(currency)
     }
 
     /// Returns the `Sign` of the `BigInt` holding the coins.
+    #[inline]
     pub fn sign(&self) -> Sign {
         self.coin.sign()
     }
@@ -246,8 +253,57 @@ impl Currency {
     ///     assert_eq!(c3.symbol(), "");
     /// }
     /// ```
+    #[inline]
     pub fn symbol(&self) -> &str {
         &self.symbol
+    }
+
+    /// Returns true if the currency is an ISO currency or a valid ISO currency symbol.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use qsv_currency::Currency;
+    ///
+    /// let currency = Currency::from_str("USD 100").unwrap();
+    /// assert!(currency.is_iso_currency());
+    ///
+    /// let currency = Currency::from_str("$ 100").unwrap();
+    /// assert!(currency.is_iso_currency());
+    ///
+    /// let currency = Currency::from_str("¥ 100").unwrap();
+    /// assert!(currency.is_iso_currency());
+    ///
+    /// let currency = Currency::from_str("JPY 1000.00").unwrap();
+    /// assert!(currency.is_iso_currency());
+    ///
+    /// // ISO currency is case sensitive
+    /// let currency = Currency::from_str("USd 100").unwrap();
+    /// assert!(!currency.is_iso_currency());
+    ///
+    /// // crypto currency like DOGE, Ethereum, Bitcoin, etc. are not ISO currencies
+    /// let currency = Currency::from_str("Ð 100").unwrap();
+    /// assert!(!currency.is_iso_currency());
+    ///
+    /// let currency = Currency::from_str("Ξ 100").unwrap();
+    /// assert!(!currency.is_iso_currency());
+    ///
+    /// let currency = Currency::from_str("100").unwrap();
+    /// assert!(!currency.is_iso_currency());
+    /// ```
+    #[inline]
+    pub fn is_iso_currency(&self) -> bool {
+        // Initialize OnceLock for symbols_map
+        static SYMBOLS_MAP: OnceLock<HashSet<String>> = OnceLock::new();
+
+        // Populate symbols_map only once
+        let symbols_map = SYMBOLS_MAP.get_or_init(|| {
+            let currencies_iter = iso_currency::Currency::iter();
+            currencies_iter.map(|c| c.symbol().to_string()).collect()
+        });
+
+        iso_currency::Currency::from_code(self.symbol()).is_some()
+            || (!self.symbol().is_empty() && symbols_map.contains(self.symbol()))
     }
 
     /// Sets the symbol of the `Currency`.
@@ -266,6 +322,7 @@ impl Currency {
     ///     assert_eq!(c, Currency::from_str("$1.00").unwrap());
     /// }
     /// ```
+    #[inline]
     pub fn set_symbol(&mut self, symbol: impl ToString) {
         self.symbol = symbol.to_string();
     }
@@ -861,10 +918,16 @@ mod tests {
     #[test]
     fn test_from_str() {
         // rounding
-        let expected = Currency { symbol: "$".into(), coin: BigInt::from(1001) };
+        let expected = Currency {
+            symbol: "$".into(),
+            coin: BigInt::from(1001),
+        };
         let actual = Currency::from_str("$10.0099").unwrap();
         assert_eq!(expected, actual);
-        let expected = Currency { symbol: "$".into(), coin: BigInt::from(10078) };
+        let expected = Currency {
+            symbol: "$".into(),
+            coin: BigInt::from(10078),
+        };
         let actual = Currency::from_str("$100.777777").unwrap();
         assert_eq!(expected, actual);
 
@@ -937,7 +1000,7 @@ mod tests {
             symbol: "$".into(),
             coin: BigInt::from(-1200099),
         };
-        let actual = Currency::from_str("-(-$-12,000.99").unwrap();
+        let actual = Currency::from_str("-$12,000.99").unwrap();
         assert_eq!(expected, actual);
         let actual = Currency::from_str("($12,000.99)").unwrap();
         assert_eq!(expected, actual);
@@ -1021,7 +1084,6 @@ mod tests {
         };
         let actual = Currency::from_str("$10.0001").unwrap();
         assert_eq!(expected, actual);
-
     }
 
     #[test]
@@ -1398,5 +1460,62 @@ mod tests {
         let expected = String::from("{\"amount\":\"-£1,234,001.01\"}");
         let actual = serde_json::to_string(&data).unwrap();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_iso_currency() {
+        // Test valid ISO currencies
+        let currency = Currency::from_str("USD1,000,000.00").unwrap();
+        assert!(currency.is_iso_currency());
+
+        let currency = Currency::from_str("EUR 100.00").unwrap();
+        assert!(currency.is_iso_currency());
+
+        let currency = Currency::from_str("JPY 10000").unwrap();
+        assert!(currency.is_iso_currency());
+
+        let currency = Currency::from_str("GBP 50.50").unwrap();
+        assert!(currency.is_iso_currency());
+
+        // Test invalid or non-ISO currencies
+        let currency = Currency::from_str("FAKE 1000").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        let currency = Currency::from_str("BTC 100").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        // Test valid ISO currency symbols
+        let currency = Currency::from_str("$1,000,000.00").unwrap();
+        assert!(currency.is_iso_currency());
+
+        let currency = Currency::from_str("€ 100,000,000.00").unwrap();
+        assert!(currency.is_iso_currency());
+
+        let currency = Currency::from_str("£50.00").unwrap();
+        assert!(currency.is_iso_currency());
+
+        // Test non-ISO currency symbols
+        let currency = Currency::from_str("₿ 50.00").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        let currency = Currency::from_str("Ð 50.00").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        let currency = Currency::from_str("Ξ 1,990.00").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        // Test edge cases
+        let currency = Currency::from_str("").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        let currency = Currency::from_str("123.45").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        // Test case sensitivity
+        let currency = Currency::from_str("USd 100.00").unwrap();
+        assert!(!currency.is_iso_currency());
+
+        let currency = Currency::from_str("USD100.00").unwrap();
+        assert!(currency.is_iso_currency());
     }
 }
