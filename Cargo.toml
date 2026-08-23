@@ -12,7 +12,8 @@ categories = [
     "internationalization",
 ]
 license = "MIT"
-edition = "2021"
+edition = "2024"
+rust-version = "1.98.0"
 
 [dependencies]
 ahash        = "0.8"
@@ -23,3 +24,10 @@ serde        = "1"
 [dev-dependencies]
 serde_json   = "1"
 serde_derive = "1"
+
+[lints.clippy]
+# priority -1 so the specific allow below wins over the group
+pedantic = { level = "warn", priority = -1 }
+# ToString::to_string takes &self, so `impl ToString` by value is not a needless move.
+# Taking `&impl ToString` would force callers to write `Currency::from(1000, &'$')`.
+needless_pass_by_value = "allow"
