@@ -16,7 +16,7 @@ edition = "2021"
 
 [dependencies]
 ahash        = "0.8"
-iso_currency = { version = "0.5", features = ["iterator"] }
+iso_currency = { version = "0.7", features = ["iterator"] }
 num          = "0.4"
 serde        = "1"
 
