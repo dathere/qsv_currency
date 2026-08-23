@@ -26,6 +26,14 @@ Edition 2024, MSRV 1.98.0 (declared via `rust-version`, so older toolchains refu
 rather than failing confusingly). `cargo fmt` applies the 2024 style edition — notably a different
 import sort order than 2021.
 
+**`clippy::pedantic` is enabled** via `[lints.clippy]` in Cargo.toml and the tree is clean under it,
+so plain `cargo clippy --all-targets` is the pedantic run — any warning is something you introduced.
+One group-wide exception is recorded there: `needless_pass_by_value` is allowed, because
+`ToString::to_string` takes `&self`, and `&impl ToString` would force callers to write
+`Currency::from(1000, &'$')`. One `#[expect(clippy::too_many_lines, reason = ...)]`, on `test_from_str`, carries its own
+justification. Prefer `#[expect]` over `#[allow]` — it warns when the suppression stops being
+needed, which is how a misplaced one gets caught.
+
 `cargo clippy --all-targets` and `cargo fmt --check` are both currently clean — treat any warning as
 something you introduced.
 

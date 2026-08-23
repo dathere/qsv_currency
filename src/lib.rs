@@ -6,8 +6,9 @@
 // Licensed under the MIT license <LICENSE-MIT or http://opensource.org/licenses/MIT>.
 // This file may not be copied, modified, or distributed except according to those terms.
 
-//! A `Currency` is a combination of an optional character (`Option<char>``) and a big integer
-//! (`BigInt`).
+//! A `Currency` is a combination of a symbol (`String`) and a big integer (`BigInt`) count of
+//! coins. The symbol is a string, not a single character: this fork exists so that multi-character
+//! codes like `"USD"` work alongside `'$'`.
 //!
 //! Common operations are overloaded to make numerical operations easy.
 //!
@@ -76,6 +77,7 @@ pub struct Currency {
 
 impl Currency {
     /// Creates a blank Currency with no symbol and 0 coin.
+    #[must_use]
     pub fn new() -> Self {
         Currency {
             symbol: String::new(),
@@ -112,12 +114,17 @@ impl Currency {
     /// let c2 = Currency::from_str("$0.10").unwrap();
     /// assert_eq!(c1 + c2, Currency::from_str("$42.42").unwrap());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseCurrencyError` only when a character in digit position cannot be parsed
+    /// as an unsigned integer, e.g. `"12-34"`. Note that this is a much narrower condition
+    /// than "the input was not a currency": parsing is deliberately permissive, so input with
+    /// no digits at all succeeds, yielding a zero amount whose symbol is the whole string.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Currency, ParseCurrencyError> {
         use num::traits::Signed;
         use std::str::FromStr;
-
-        let err = ParseCurrencyError::new(s);
 
         const fn is_symbol(c: char) -> bool {
             !c.is_ascii_digit() && c != '-' && c != '.' && c != ',' && c != ')'
@@ -126,6 +133,8 @@ impl Currency {
         const fn is_delimiter(c: char) -> bool {
             c == '.' || c == ','
         }
+
+        let err = ParseCurrencyError::new(s);
 
         let mut digits = String::new();
         let mut symbol = String::new();
@@ -213,6 +222,7 @@ impl Currency {
     }
 
     /// Returns the `Sign` of the `BigInt` holding the coins.
+    #[must_use]
     #[inline]
     pub fn sign(&self) -> Sign {
         self.coin.sign()
@@ -239,6 +249,7 @@ impl Currency {
     ///     assert_eq!(c2.value().to_u32().unwrap(), 142);
     /// }
     /// ```
+    #[must_use]
     pub const fn value(&self) -> &BigInt {
         &self.coin
     }
@@ -263,6 +274,7 @@ impl Currency {
     ///     assert_eq!(c3.symbol(), "");
     /// }
     /// ```
+    #[must_use]
     #[inline]
     pub fn symbol(&self) -> &str {
         &self.symbol
@@ -350,6 +362,7 @@ impl Currency {
     /// let euros = dollars.convert(0.89, '€');
     /// assert_eq!(euros, Currency::from_str("€8.90").unwrap());
     /// ```
+    #[must_use]
     pub fn convert(&self, conversion_rate: f64, currency_symbol: impl ToString) -> Currency {
         let mut result = self * conversion_rate;
         result.symbol = currency_symbol.to_string();
@@ -978,6 +991,10 @@ mod tests {
     use num::bigint::BigInt;
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a flat list of parse assertions; splitting it would only scatter them"
+    )]
     fn test_from_str() {
         // rounding
         let expected = Currency {
@@ -1010,7 +1027,7 @@ mod tests {
         assert_eq!(expected, actual);
 
         let expected = Currency {
-            symbol: "".into(),
+            symbol: String::new(),
             coin: BigInt::from(1210),
         };
         let actual = Currency::from_str("12.10").unwrap();
@@ -1021,7 +1038,7 @@ mod tests {
         assert_eq!(expected, actual);
 
         let expected = Currency {
-            symbol: "".into(),
+            symbol: String::new(),
             coin: BigInt::from(-1210),
         };
         let actual = Currency::from_str("(12.10)").unwrap();
@@ -1029,7 +1046,7 @@ mod tests {
 
         let expected = Currency {
             symbol: "$".into(),
-            coin: BigInt::from(121000),
+            coin: BigInt::from(121_000),
         };
         let actual = Currency::from_str("$1210").unwrap();
         assert_eq!(expected, actual);
@@ -1046,21 +1063,21 @@ mod tests {
 
         let expected = Currency {
             symbol: "$".into(),
-            coin: BigInt::from(1200099),
+            coin: BigInt::from(1_200_099),
         };
         let actual = Currency::from_str("$12,000.99").unwrap();
         assert_eq!(expected, actual);
 
         let expected = Currency {
             symbol: "£".into(),
-            coin: BigInt::from(1200099),
+            coin: BigInt::from(1_200_099),
         };
         let actual = Currency::from_str("£12,000.99").unwrap();
         assert_eq!(expected, actual);
 
         let expected = Currency {
             symbol: "$".into(),
-            coin: BigInt::from(-1200099),
+            coin: BigInt::from(-1_200_099),
         };
         let actual = Currency::from_str("-$12,000.99").unwrap();
         assert_eq!(expected, actual);
@@ -1111,7 +1128,7 @@ mod tests {
         assert_eq!(expected, actual);
 
         let expected = Currency {
-            symbol: "".into(),
+            symbol: String::new(),
             coin: BigInt::from(12000),
         };
         let actual = Currency::from_str("120USD").unwrap();
@@ -1163,10 +1180,10 @@ mod tests {
             coin: BigInt::from(1251),
         };
 
-        assert!(a == b);
-        assert!(b == b);
-        assert!(b == a);
-        assert!(a != c);
+        assert_eq!(a, b);
+        assert_eq!(b, b);
+        assert_eq!(b, a);
+        assert_ne!(a, c);
     }
 
     #[test]
@@ -1233,7 +1250,7 @@ mod tests {
             symbol: "$".into(),
             coin: BigInt::from(1311),
         };
-        assert!(&a + &b == &b + &a);
+        assert_eq!(&a + &b, &b + &a);
     }
 
     #[test]
@@ -1386,7 +1403,7 @@ mod tests {
 
         assert_eq!(
             Currency {
-                symbol: "".into(),
+                symbol: String::new(),
                 coin: BigInt::from(11)
             }
             .to_string(),
@@ -1395,7 +1412,7 @@ mod tests {
 
         assert_eq!(
             Currency {
-                symbol: "".into(),
+                symbol: String::new(),
                 coin: BigInt::from(1210)
             }
             .to_string(),
@@ -1413,7 +1430,7 @@ mod tests {
 
         assert_eq!(
             Currency {
-                symbol: "".into(),
+                symbol: String::new(),
                 coin: BigInt::from(10000)
             }
             .to_string(),
@@ -1423,7 +1440,7 @@ mod tests {
         assert_eq!(
             Currency {
                 symbol: "£".into(),
-                coin: BigInt::from(100010)
+                coin: BigInt::from(100_010)
             }
             .to_string(),
             "£1,000.10"
@@ -1432,7 +1449,7 @@ mod tests {
         assert_eq!(
             Currency {
                 symbol: "USD".into(),
-                coin: BigInt::from(100010)
+                coin: BigInt::from(100_010)
             }
             .to_string(),
             "USD1,000.10"
@@ -1441,7 +1458,7 @@ mod tests {
         assert_eq!(
             Currency {
                 symbol: "USD ".into(),
-                coin: BigInt::from(100010)
+                coin: BigInt::from(100_010)
             }
             .to_string(),
             "USD 1,000.10"
@@ -1473,7 +1490,7 @@ mod tests {
                 "{:e}",
                 Currency {
                     symbol: "£".into(),
-                    coin: BigInt::from(100000)
+                    coin: BigInt::from(100_000)
                 }
             ),
             "£1.000,00"
@@ -1484,7 +1501,7 @@ mod tests {
                 "{:e}",
                 Currency {
                     symbol: "£".into(),
-                    coin: BigInt::from(123400101)
+                    coin: BigInt::from(123_400_101)
                 }
             ),
             "£1.234.001,01"
@@ -1516,7 +1533,7 @@ mod tests {
         let data = HoldsCurrency {
             amount: Currency {
                 symbol: "£".into(),
-                coin: BigInt::from(-123400101),
+                coin: BigInt::from(-123_400_101),
             },
         };
         let expected = String::from("{\"amount\":\"-£1,234,001.01\"}");
