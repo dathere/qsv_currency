@@ -805,7 +805,7 @@ impl_all_trait_combinations_for_currency_conv_bigint!(ops::Div, div, f64, from_f
 ///
 /// # Panics
 /// Panics if they aren't the same type of currency, as denoted by the currency's symbol.
-impl<'a, 'b> ops::Div<&'b Currency> for &'a Currency {
+impl<'b> ops::Div<&'b Currency> for &Currency {
     type Output = BigInt;
 
     fn div(self, other: &'b Currency) -> BigInt {
@@ -821,7 +821,7 @@ impl<'a, 'b> ops::Div<&'b Currency> for &'a Currency {
 ///
 /// # Panics
 /// Panics if they aren't the same type of currency, as denoted by the currency's symbol.
-impl<'a> ops::Div<Currency> for &'a Currency {
+impl ops::Div<Currency> for &Currency {
     type Output = BigInt;
 
     fn div(self, other: Currency) -> BigInt {
@@ -876,7 +876,7 @@ impl ops::Neg for Currency {
     }
 }
 
-impl<'a> ops::Neg for &'a Currency {
+impl ops::Neg for &Currency {
     type Output = Currency;
 
     fn neg(self) -> Currency {
@@ -1222,7 +1222,7 @@ mod tests {
             coin: BigInt::from(1211),
         };
         let f = 0.97;
-        assert_eq!(&a * &f, &f * &a);
+        assert_eq!(&a * f, f * &a);
     }
 
     #[test]
