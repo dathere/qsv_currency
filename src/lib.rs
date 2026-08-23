@@ -1,4 +1,5 @@
-// TODO issues with precision. truncation all over the place
+// Parsing rounds exactly (BigInt, half away from zero). Multiplication and division still
+// truncate to two decimal places — see the "Limitations" section in the crate docs.
 
 // Copyright (c) 2016 Tyler Berry All Rights Reserved.
 //
@@ -36,8 +37,11 @@
 //! This crate cannot lookup conversion data dynamically. It does supply a `convert` function, but
 //! the conversion rates will need to be input by the user.
 //!
-//! This crate also does not handle rounding or precision. Values are truncated during
-//! multiplication, division, and extra precision in a parse (such as gas prices).
+//! Values are stored to two decimal places. Parsing a string with more precision than that
+//! rounds half away from zero; multiplication and division still truncate.
+//!
+//! Multiplication by a scalar works in either operand order. Division does not: only
+//! `Currency / scalar` is implemented, since `scalar / Currency` has no meaningful value.
 
 use std::sync::OnceLock;
 
@@ -110,6 +114,7 @@ impl Currency {
     /// ```
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Currency, ParseCurrencyError> {
+        use num::traits::Signed;
         use std::str::FromStr;
 
         let err = ParseCurrencyError::new(s);
@@ -158,44 +163,49 @@ impl Currency {
         let unsigned_bigint = if digits.is_empty() {
             BigUint::zero()
         } else {
-            let parse_result = BigUint::from_str(&digits);
-            if let Ok(int) = parse_result {
-                int
-            } else {
-                println!("{digits:?}");
+            // note: no println! here — this is a library, and for qsv stdout is the
+            // data channel, so writing to it can corrupt piped output
+            let Ok(int) = BigUint::from_str(&digits) else {
                 return Err(err);
-            }
+            };
+            int
         };
         let mut coin = BigInt::from_biguint(sign, unsigned_bigint);
 
         // decimal adjustment
         if last_delimiter.is_none() || last_streak_len == 3 {
             // no decimal at all
-            let big_int_factor = BigInt::from(100);
-            coin *= big_int_factor;
+            coin *= BigInt::from(100);
         } else if last_streak_len < 2 {
             // specifying less cents than needed
-            let factor = 10u32.pow(2 - last_streak_len);
-            let big_int_factor = BigInt::from(factor);
-            coin *= big_int_factor;
+            coin *= BigInt::from(10).pow(2 - last_streak_len);
         } else if last_streak_len > 2 {
-            // specifying more cents than we can hold
-            // we "round"
-            let str_val = format!("{coin}");
-            let float_val =
-                str_val.parse::<f64>().unwrap() / (10u32.pow(last_streak_len - 2) as f64);
-            let rounded_val = float_val.round() as u64;
-            let rounded_str = rounded_val.to_string();
-            let Ok(unsigned_bigint) = BigUint::from_str(&rounded_str) else {
-                println!("rounding error: {float_val:?}");
-                return Err(err);
+            // More cents than we can hold, so round half away from zero.
+            //
+            // This is done entirely in BigInt rather than by way of f64: going through a
+            // float used to lose precision on large values, overflow the exponent past 11
+            // decimal places, and — because the cast to u64 saturates — silently turn every
+            // negative value into zero.
+            let divisor = BigInt::from(10).pow(last_streak_len - 2);
+            let magnitude = coin.abs();
+            let quotient = &magnitude / &divisor;
+            let remainder = &magnitude % &divisor;
+            let rounded = if remainder * 2u8 >= divisor {
+                quotient + 1u8
+            } else {
+                quotient
             };
-            let rounded_coin = BigInt::from_biguint(sign, unsigned_bigint);
-            coin = rounded_coin;
+            coin = if sign == Sign::Minus {
+                -rounded
+            } else {
+                rounded
+            };
         } // else the user has valid cents, no adjustment needed
 
         let currency = Currency {
-            symbol: symbol.trim_end().to_string(),
+            // trim both ends: leading whitespace is common in CSV columns, and leaving
+            // it in the symbol breaks is_iso_currency() and panics on arithmetic
+            symbol: symbol.trim().to_string(),
             coin,
         };
 
@@ -447,11 +457,8 @@ impl fmt::Display for ParseCurrencyError {
     }
 }
 
-impl error::Error for ParseCurrencyError {
-    fn description(&self) -> &str {
-        "Failed to parse currency"
-    }
-}
+// `Error::description` is deprecated since Rust 1.42; `Display` carries the message.
+impl error::Error for ParseCurrencyError {}
 
 /// Identical to the implementation of Display, but replaces the "." with a ",". Access this
 /// formatting by using "{:e}".
@@ -470,10 +477,18 @@ impl error::Error for ParseCurrencyError {
 /// ```
 impl fmt::LowerExp for Currency {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let temp = format!("{self}").replace('.', "x");
-        let almost = temp.replace(',', ".");
-        let there_we_go = almost.replace('x', ",");
-        write!(f, "{there_we_go}")
+        // Swap in a single pass. The original implementation round-tripped through an
+        // 'x' placeholder, which corrupted any symbol containing an 'x' — "Mex$1.000,99"
+        // came out as "Me,$1.000,99".
+        let swapped: String = format!("{self}")
+            .chars()
+            .map(|c| match c {
+                '.' => ',',
+                ',' => '.',
+                other => other,
+            })
+            .collect();
+        write!(f, "{swapped}")
     }
 }
 
@@ -554,10 +569,19 @@ impl_all_trait_combinations_for_currency!(ops::Add, add);
 impl_all_trait_combinations_for_currency!(ops::Sub, sub);
 // impl_all_trait_combinations_for_currency!(ops::Mul, mul); TODO decide whether this should exist
 
+// Scalar arithmetic is generated in two halves:
+//
+//   *_currency_lhs!  -> Currency OP scalar
+//   *_scalar_lhs!    -> scalar OP Currency
+//
+// Multiplication is commutative, so it gets both halves. Division is NOT, so it gets
+// only the currency_lhs half: `2.0 / $10.00` has no meaningful Currency value, and the
+// generated impls used to answer it by silently computing `$10.00 / 2.0`.
+
 // other type must implement Into<BigInt>
-macro_rules! impl_all_trait_combinations_for_currency_into_bigint {
+macro_rules! impl_currency_lhs_into_bigint {
     ($module:ident::$imp:ident, $method:ident, $other:ty) => {
-        impl<'a, 'b> $module::$imp<&'b $other> for &'a Currency {
+        impl<'b> $module::$imp<&'b $other> for &Currency {
             type Output = Currency;
 
             #[inline]
@@ -570,7 +594,7 @@ macro_rules! impl_all_trait_combinations_for_currency_into_bigint {
             }
         }
 
-        impl<'a> $module::$imp<$other> for &'a Currency {
+        impl $module::$imp<$other> for &Currency {
             type Output = Currency;
 
             #[inline]
@@ -608,8 +632,12 @@ macro_rules! impl_all_trait_combinations_for_currency_into_bigint {
                 }
             }
         }
+    };
+}
 
-        impl<'a, 'b> $module::$imp<&'b Currency> for &'a $other {
+macro_rules! impl_scalar_lhs_into_bigint {
+    ($module:ident::$imp:ident, $method:ident, $other:ty) => {
+        impl<'b> $module::$imp<&'b Currency> for &$other {
             type Output = Currency;
 
             #[inline]
@@ -622,7 +650,7 @@ macro_rules! impl_all_trait_combinations_for_currency_into_bigint {
             }
         }
 
-        impl<'a> $module::$imp<Currency> for &'a $other {
+        impl $module::$imp<Currency> for &$other {
             type Output = Currency;
 
             #[inline]
@@ -663,54 +691,81 @@ macro_rules! impl_all_trait_combinations_for_currency_into_bigint {
     };
 }
 
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, BigUint);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, u8);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, u16);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, u32);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, u64);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, usize);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, i8);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, i16);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, i32);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, i64);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Mul, mul, isize);
+macro_rules! impl_int_scalar_ops {
+    ($($other:ty),* $(,)?) => {
+        $(
+            // multiplication is commutative, so both operand orders are generated
+            impl_currency_lhs_into_bigint!(ops::Mul, mul, $other);
+            impl_scalar_lhs_into_bigint!(ops::Mul, mul, $other);
+            // division is not: only `Currency / scalar` is meaningful
+            impl_currency_lhs_into_bigint!(ops::Div, div, $other);
+        )*
+    };
+}
 
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, BigUint);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, u8);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, u16);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, u32);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, u64);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, usize);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, i8);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, i16);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, i32);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, i64);
-impl_all_trait_combinations_for_currency_into_bigint!(ops::Div, div, isize);
+impl_int_scalar_ops!(BigUint, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
-macro_rules! impl_all_trait_combinations_for_currency_conv_bigint {
-    ($module:ident::$imp:ident, $method:ident, $other:ty, $conv_method:ident) => {
-        impl<'a, 'b> $module::$imp<&'b $other> for &'a Currency {
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// float scalar arithmetic
+
+/// Converts a float into the equivalent number of coins (i.e. scaled by 100).
+///
+/// # Panics
+/// Panics if `value` is NaN or infinite. The `Mul`/`Div` operators cannot return a
+/// `Result`, so a non-finite operand is a caller bug rather than a recoverable error.
+macro_rules! define_scaled_from_float {
+    ($name:ident, $float:ty, $conv_method:ident) => {
+        #[inline]
+        fn $name(value: $float) -> BigInt {
+            BigInt::$conv_method(value * 100.0).unwrap_or_else(|| {
+                panic!("cannot use a non-finite value ({value}) as a currency operand")
+            })
+        }
+    };
+}
+
+define_scaled_from_float!(scaled_from_f32, f32, from_f32);
+define_scaled_from_float!(scaled_from_f64, f64, from_f64);
+
+// The two formulas below are the whole reason the float ops are split from the integer
+// ops: `scaled` carries a factor of 100 that has to be cancelled on the correct side.
+// Each formula is written exactly once.
+
+/// `coin * scalar`, undoing the 100 that `scaled` carries.
+#[inline]
+fn combine_mul(coin: BigInt, scaled: BigInt) -> BigInt {
+    coin * scaled / BigInt::from(100)
+}
+
+/// `coin / scalar`. The 100 scales the *numerator*; dividing the result by 100 instead
+/// (as this once did) is wrong by a factor of 10,000.
+#[inline]
+fn combine_div(coin: BigInt, scaled: BigInt) -> BigInt {
+    coin * BigInt::from(100) / scaled
+}
+
+macro_rules! impl_currency_lhs_float {
+    ($module:ident::$imp:ident, $method:ident, $other:ty, $scaled:ident, $combine:ident) => {
+        impl<'b> $module::$imp<&'b $other> for &Currency {
             type Output = Currency;
 
             #[inline]
             fn $method(self, other: &'b $other) -> Currency {
-                let big_int = BigInt::$conv_method(other.clone() * 100.0).unwrap();
                 Currency {
                     symbol: self.symbol.clone(),
-                    coin: self.coin.clone().$method(big_int) / BigInt::from(100),
+                    coin: $combine(self.coin.clone(), $scaled(*other)),
                 }
             }
         }
 
-        impl<'a> $module::$imp<$other> for &'a Currency {
+        impl $module::$imp<$other> for &Currency {
             type Output = Currency;
 
             #[inline]
             fn $method(self, other: $other) -> Currency {
-                let big_int = BigInt::$conv_method(other * 100.0).unwrap();
                 Currency {
                     symbol: self.symbol.clone(),
-                    coin: self.coin.clone().$method(big_int) / BigInt::from(100),
+                    coin: $combine(self.coin.clone(), $scaled(other)),
                 }
             }
         }
@@ -720,10 +775,9 @@ macro_rules! impl_all_trait_combinations_for_currency_conv_bigint {
 
             #[inline]
             fn $method(self, other: &'a $other) -> Currency {
-                let big_int = BigInt::$conv_method(other.clone() * 100.0).unwrap();
                 Currency {
                     symbol: self.symbol,
-                    coin: self.coin.$method(big_int) / BigInt::from(100),
+                    coin: $combine(self.coin, $scaled(*other)),
                 }
             }
         }
@@ -733,36 +787,37 @@ macro_rules! impl_all_trait_combinations_for_currency_conv_bigint {
 
             #[inline]
             fn $method(self, other: $other) -> Currency {
-                let big_int = BigInt::$conv_method(other * 100.0).unwrap();
                 Currency {
                     symbol: self.symbol,
-                    coin: self.coin.$method(big_int) / BigInt::from(100),
+                    coin: $combine(self.coin, $scaled(other)),
                 }
             }
         }
+    };
+}
 
-        impl<'a, 'b> $module::$imp<&'b Currency> for &'a $other {
+macro_rules! impl_scalar_lhs_float {
+    ($module:ident::$imp:ident, $method:ident, $other:ty, $scaled:ident, $combine:ident) => {
+        impl<'b> $module::$imp<&'b Currency> for &$other {
             type Output = Currency;
 
             #[inline]
             fn $method(self, other: &'b Currency) -> Currency {
-                let big_int = BigInt::$conv_method(self.clone() * 100.0).unwrap();
                 Currency {
                     symbol: other.symbol.clone(),
-                    coin: other.coin.clone().$method(big_int) / BigInt::from(100),
+                    coin: $combine(other.coin.clone(), $scaled(*self)),
                 }
             }
         }
 
-        impl<'a> $module::$imp<Currency> for &'a $other {
+        impl $module::$imp<Currency> for &$other {
             type Output = Currency;
 
             #[inline]
             fn $method(self, other: Currency) -> Currency {
-                let big_int = BigInt::$conv_method(self.clone() * 100.0).unwrap();
                 Currency {
                     symbol: other.symbol,
-                    coin: other.coin.$method(big_int) / BigInt::from(100),
+                    coin: $combine(other.coin, $scaled(*self)),
                 }
             }
         }
@@ -772,10 +827,9 @@ macro_rules! impl_all_trait_combinations_for_currency_conv_bigint {
 
             #[inline]
             fn $method(self, other: &'a Currency) -> Currency {
-                let big_int = BigInt::$conv_method(self * 100.0).unwrap();
                 Currency {
                     symbol: other.symbol.clone(),
-                    coin: other.coin.clone().$method(big_int) / BigInt::from(100),
+                    coin: $combine(other.coin.clone(), $scaled(self)),
                 }
             }
         }
@@ -785,21 +839,24 @@ macro_rules! impl_all_trait_combinations_for_currency_conv_bigint {
 
             #[inline]
             fn $method(self, other: Currency) -> Currency {
-                let big_int = BigInt::$conv_method(self * 100.0).unwrap();
                 Currency {
                     symbol: other.symbol,
-                    coin: other.coin.$method(big_int) / BigInt::from(100),
+                    coin: $combine(other.coin, $scaled(self)),
                 }
             }
         }
     };
 }
 
-impl_all_trait_combinations_for_currency_conv_bigint!(ops::Mul, mul, f32, from_f32);
-impl_all_trait_combinations_for_currency_conv_bigint!(ops::Mul, mul, f64, from_f64);
+// multiplication by a float is commutative
+impl_currency_lhs_float!(ops::Mul, mul, f32, scaled_from_f32, combine_mul);
+impl_currency_lhs_float!(ops::Mul, mul, f64, scaled_from_f64, combine_mul);
+impl_scalar_lhs_float!(ops::Mul, mul, f32, scaled_from_f32, combine_mul);
+impl_scalar_lhs_float!(ops::Mul, mul, f64, scaled_from_f64, combine_mul);
 
-impl_all_trait_combinations_for_currency_conv_bigint!(ops::Div, div, f32, from_f32);
-impl_all_trait_combinations_for_currency_conv_bigint!(ops::Div, div, f64, from_f64);
+// division is not — `2.0 / $10.00` is deliberately not implemented
+impl_currency_lhs_float!(ops::Div, div, f32, scaled_from_f32, combine_div);
+impl_currency_lhs_float!(ops::Div, div, f64, scaled_from_f64, combine_div);
 
 /// Overloads the '/' operator between two borrowed Currency objects.
 ///
@@ -891,6 +948,11 @@ impl ops::Neg for &Currency {
 // - rem
 // - signed
 
+/// Deserializes from a JSON string (not a number), e.g. `{"amount": "-$12,000.99"}`.
+///
+/// Note that this inherits `from_str`'s permissiveness: a string with no digits in it
+/// deserializes to a zero amount rather than failing, so `"garbage"` yields `$0.00` with
+/// the symbol set to `"garbage"`.
 impl<'de> Deserialize<'de> for Currency {
     fn deserialize<D>(deserializer: D) -> Result<Currency, D::Error>
     where
@@ -1517,5 +1579,87 @@ mod tests {
 
         let currency = Currency::from_str("USD100.00").unwrap();
         assert!(currency.is_iso_currency());
+    }
+
+    // Regression tests for the defects found in the 2026-08 review. Each of these was
+    // first written to assert the *wrong* value the code produced at the time, confirmed
+    // to pass, then flipped to the correct expectation.
+    mod regressions {
+        use super::super::Currency;
+        use num::bigint::BigInt;
+
+        // Negatives used to saturate to zero: format!("{coin}") is signed, so the f64
+        // round-trip produced a negative, and `.round() as u64` clamps that to 0.
+        #[test]
+        fn negative_with_extra_decimals_rounds_correctly() {
+            assert_eq!(
+                *Currency::from_str("-$12.9999").unwrap().value(),
+                BigInt::from(-1300)
+            );
+            // half-away-from-zero at the boundary (4 decimals: a 3-digit streak is
+            // deliberately read as a thousands separator instead)
+            assert_eq!(
+                *Currency::from_str("-$0.0050").unwrap().value(),
+                BigInt::from(-1)
+            );
+            // rounding is symmetric about zero
+            assert_eq!(
+                Currency::from_str("-$12.9999").unwrap().value().magnitude(),
+                Currency::from_str("$12.9999").unwrap().value().magnitude()
+            );
+        }
+
+        // `coin.div(scalar * 100) / 100` was wrong by a factor of 10,000.
+        #[test]
+        fn division_by_float_is_exact() {
+            let ten = Currency::from_str("$10.00").unwrap();
+            assert_eq!(*(&ten / 2.0f64).value(), BigInt::from(500));
+            assert_eq!(*(&ten / 0.5f64).value(), BigInt::from(2000));
+            assert_eq!(*(&ten / 4.0f32).value(), BigInt::from(250));
+            // multiplication was already correct; guard against regressing it
+            assert_eq!(*(&ten * 0.97f64).value(), BigInt::from(970));
+        }
+
+        // Large values used to lose precision through f64 and overflow `10u32.pow` past
+        // 11 decimal places.
+        #[test]
+        fn many_decimals_neither_panic_nor_lose_precision() {
+            assert_eq!(
+                *Currency::from_str("$1.000000000000").unwrap().value(),
+                BigInt::from(100)
+            );
+            let big = "$123456789012345678901234567890.987654321";
+            assert_eq!(
+                Currency::from_str(big).unwrap().to_string(),
+                "$123,456,789,012,345,678,901,234,567,890.99"
+            );
+        }
+
+        // `trim_end` left leading whitespace in the symbol, which broke ISO detection and
+        // made arithmetic against an unpadded value panic.
+        #[test]
+        fn leading_whitespace_is_trimmed_from_symbol() {
+            let padded = Currency::from_str("  $1.00").unwrap();
+            assert_eq!(padded.symbol(), "$");
+            assert!(padded.is_iso_currency());
+            assert_eq!(padded + Currency::from_str("$1.00").unwrap(), {
+                Currency::from_str("$2.00").unwrap()
+            });
+        }
+
+        #[test]
+        #[should_panic(expected = "non-finite")]
+        fn non_finite_float_panics_with_a_clear_message() {
+            let _ = Currency::from_str("$1.00").unwrap() * f64::NAN;
+        }
+
+        // The old `{:e}` swapped ',' and '.' via an 'x' placeholder, mangling any symbol
+        // containing an 'x'.
+        #[test]
+        fn lower_exp_preserves_x_in_symbol() {
+            let c = Currency::from_str("Mex$1.000,99").unwrap();
+            assert_eq!(c.symbol(), "Mex$");
+            assert_eq!(format!("{c:e}"), "Mex$1.000,99");
+        }
     }
 }
