@@ -3,3 +3,5 @@ Cargo.lock
 *.swp
 # roborev snapshots
 /.roborev/
+# serena project cache
+/.serena/
