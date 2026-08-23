@@ -57,9 +57,9 @@ extern crate serde_derive;
 
 use std::{error, fmt, ops, str};
 
+use num::Zero;
 use num::bigint::{BigInt, BigUint, Sign};
 use num::traits::FromPrimitive;
-use num::Zero;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 const DECIMAL_PLACES: usize = 2;

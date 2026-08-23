@@ -22,6 +22,10 @@ cargo clippy --all-targets
 cargo fmt --check
 ```
 
+Edition 2024, MSRV 1.98.0 (declared via `rust-version`, so older toolchains refuse to build
+rather than failing confusingly). `cargo fmt` applies the 2024 style edition — notably a different
+import sort order than 2021.
+
 `cargo clippy --all-targets` and `cargo fmt --check` are both currently clean — treat any warning as
 something you introduced.
 
